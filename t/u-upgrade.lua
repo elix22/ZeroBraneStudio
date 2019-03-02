@@ -39,7 +39,11 @@ for env, val in pairs(envs) do
   if val then wx.wxSetEnv(env, val) else wx.wxUnsetEnv(env) end
 end
 
-is(jit.version, "LuaJIT 2.0.4", "Using LuaJIT with the expected version.")
+is(jit and jit.version, "LuaJIT 2.0.4", "Using LuaJIT with the expected version.")
+
+if ide.osname == "Windows" then
+  ok(jit and pcall(require, 'fs'), "fs module is loaded.")
+end
 
 require "lpeg"
 local lexpath = package.searchpath("lexlpeg", ide.osclibs)

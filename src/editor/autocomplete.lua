@@ -260,15 +260,16 @@ local function resolveAssign(editor,tx)
         classname = classname or assigns[c..w]
         if (s ~= "" and old ~= classname) then
           -- continue checking unless this can lead to recursive substitution
-          change = not classname:find("^"..w..anysep) and not classname:find("^"..c..w..anysep)
+          if refs[w] then change = false; break end
           c = classname..s
         else
           c = c..w..s
         end
+        refs[w] = true
       end
       -- check for loops in type assignment
       if refs[tx] then break end
-      refs[tx] = c
+      refs[tx] = true
       tx = c
       -- if there is any class duplication, abort the loop
       if classname and select(2, c:gsub(classname, classname)) > 1 then break end
@@ -583,18 +584,21 @@ function CreateAutoCompList(editor,key,pos)
   if ide.config.acandtip.symbols and not key:find(q(sep)) then
     local vars, context = {}
     local tokens = editor:GetTokenList()
+    local strategy = tonumber(ide.config.acandtip.symbols)
+    local tkey = "^"..(strategy == 2 and key:gsub(".", "%1.*"):gsub("%.%*$","") or q(key))
+      :gsub("(%w)", function(s) return s == s:upper() and s or "["..s:lower()..s:upper().."]" end)
     for _, token in ipairs(tokens) do
       if token.fpos and pos and token.fpos > pos then break end
       if token[1] == 'Id' or token[1] == 'Var' then
         local var = token.name
-        if var:find(key, 1, true) == 1
+        if var:find(tkey)
         -- skip the variable formed by what's being typed
         and (not token.fpos or not pos or token.fpos < pos-#key) then
           -- if it's a global variable, store in the auto-complete list,
           -- but if it's local, store separately as it needs to be checked
           table.insert(token.context[var] and vars or apilist, var)
         end
-        context = token.context
+        context = token.context -- keep track of the last (innermost) context
       end
     end
     for _, var in pairs(context and vars or {}) do
@@ -615,13 +619,18 @@ function CreateAutoCompList(editor,key,pos)
 
   local li
   if apilist then
-    if (#rest > 0) then
+    if (#rest > 0 and #apilist > 1) then
       local strategy = ide.config.acandtip.strategy
 
       if (strategy == 2 and #apilist < 128) then
         -- when matching "ret": "ret." < "re.t" < "r.et"
-        local patany = rest:gsub(".", function(c) return "["..c:lower()..c:upper().."](.-)" end)
-        local patcase = rest:gsub(".", function(c) return c.."(.-)" end)
+        -- only do this for the first 32 captures as this is the default in Lua;
+        -- having more captures will trigger "too many captures" error
+        local MAXCAPTURES = 32
+        local patany = rest:gsub("()(.)", function(p,c)
+            return "["..c:lower()..c:upper().."]"..(p<=MAXCAPTURES and "(.-)" or "") end)
+        local patcase = rest:gsub("()(.)", function(p,c)
+            return c..(p<=MAXCAPTURES and "(.-)" or "") end)
         local weights = {}
         local penalty = 0.1
         local function weight(str)

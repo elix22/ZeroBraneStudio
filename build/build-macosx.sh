@@ -70,6 +70,11 @@ for ARG in "$@"; do
     BUILD_53=true
     BUILD_FLAGS="$BUILD_FLAGS -DLUA_COMPAT_APIINTCASTS"
     ;;
+  5.4)
+    BUILD_LUA=true
+    BUILD_54=true
+    BUILD_FLAGS="$BUILD_FLAGS -DLUA_COMPAT_APIINTCASTS"
+    ;;
   jit)
     BUILD_LUA=true
     BUILD_JIT=true
@@ -111,6 +116,7 @@ for ARG in "$@"; do
     BUILD_LUASEC=true
     BUILD_LFS=true
     BUILD_LPEG=true
+    BUILD_LEXLPEG=true
     ;;
   *)
     echo "Error: invalid argument $ARG"
@@ -119,27 +125,23 @@ for ARG in "$@"; do
   esac
 done
 
-# check for g++
 if [ ! "$(which g++)" ]; then
   echo "Error: g++ isn't found. Please install GNU C++ compiler."
   exit 1
 fi
 
-# check for cmake
 if [ ! "$(which cmake)" ]; then
   echo "Error: cmake isn't found. Please install CMake and add it to PATH."
   exit 1
 fi
 
-# check for git
 if [ ! "$(which git)" ]; then
   echo "Error: git isn't found. Please install console GIT client."
   exit 1
 fi
 
-# check for wget
-if [ ! "$(which wget)" ]; then
-  echo "Error: wget isn't found. Please install GNU Wget."
+if [ ! "$(which curl)" ]; then
+  echo "Error: curl isn't found. Please install curl."
   exit 1
 fi
 
@@ -167,6 +169,15 @@ if [ $BUILD_53 ]; then
   LUA_URL="http://www.lua.org/ftp/$LUA_FILENAME"
 fi
 
+if [ $BUILD_54 ]; then
+  LUAV="54"
+  LUAS=$LUAV
+  LUA_BASENAME="lua-5.4.0-work1"
+  LUA_FILENAME="$LUA_BASENAME.tar.gz"
+  LUA_URL="http://www.lua.org/work/$LUA_FILENAME"
+  LUA_COMPAT="MYCFLAGS=-DLUA_COMPAT_MODULE"
+fi
+
 if [ $BUILD_JIT ]; then
   LUA_BASENAME="luajit"
   LUA_URL="https://github.com/pkulchenko/luajit.git"
@@ -178,7 +189,7 @@ if [ $BUILD_LUA ]; then
     git clone "$LUA_URL" "$LUA_BASENAME"
     (cd "$LUA_BASENAME"; git checkout v2.0.4)
   else
-    wget -c "$LUA_URL" -O "$LUA_FILENAME" || { echo "Error: failed to download Lua"; exit 1; }
+    curl -L "$LUA_URL" > "$LUA_FILENAME" || { echo "Error: failed to download Lua"; exit 1; }
     tar -xzf "$LUA_FILENAME"
   fi
   cd "$LUA_BASENAME"
@@ -211,7 +222,7 @@ fi
 if [ $BUILD_LEXLPEG ]; then
   # need wxwidgets/Scintilla and lua files
   git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
-  wget --no-check-certificate -c "$LEXLPEG_URL" -O "$LEXLPEG_FILENAME" || { echo "Error: failed to download LexLPeg"; exit 1; }
+  curl -L "$LEXLPEG_URL" > "$LEXLPEG_FILENAME" || { echo "Error: failed to download LexLPeg"; exit 1; }
   unzip "$LEXLPEG_FILENAME"
   cd "$LEXLPEG_BASENAME"
 
@@ -229,13 +240,23 @@ if [ $BUILD_LEXLPEG ]; then
   [ $DEBUGBUILD ] || strip -u -r "$INSTALL_DIR/lib/lua/$LUAV/lexlpeg.dylib"
 
   cd ..
-  rm -rf "$WXWIDGETS_BASENAME" "$LEXLPEG_BASENAME" "$LEXLPEG_FILENAME"
+  rm -rf "$LEXLPEG_BASENAME" "$LEXLPEG_FILENAME"
+  # don't delete wxwidgets, if it's requested to be built
+  [ $BUILD_WXWIDGETS ] || rm -rf "$WXWIDGETS_BASENAME"
 fi
 
 # build wxWidgets
 if [ $BUILD_WXWIDGETS ]; then
-  git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
+  # don't clone again, as it's already cloned for lexlpeg
+  [ $BUILD_LEXLPEG ] || git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
   cd "$WXWIDGETS_BASENAME"
+
+  # checkout the version that was used in wxwidgets upgrade to 3.1.x
+  git checkout WX_3_1_0-7d9d59
+
+  # refresh wxwidgets submodules
+  git submodule update --init --recursive
+
   MINSDK=""
   if [ -d $MACOSX_SDK_PATH ]; then
     MINSDK="--with-macosx-sdk=$MACOSX_SDK_PATH"
@@ -264,7 +285,9 @@ fi
 if [ $BUILD_WXLUA ]; then
   git clone "$WXLUA_URL" "$WXLUA_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
   cd "$WXLUA_BASENAME/wxLua"
-  git checkout wxwidgets311
+
+  # checkout the version that matches what was used in wxwidgets upgrade to 3.1.x
+  git checkout WX_3_1_0-7d9d59
 
   MINSDK=""
   if [ -d $MACOSX_SDK_PATH ]; then
@@ -287,6 +310,8 @@ if [ $BUILD_WXLUA ]; then
   (cd modules/luamodule; make $MAKEFLAGS) || { echo "Error: failed to build wxLua"; exit 1; }
   (cd modules/luamodule; make install)
   [ -f "$INSTALL_DIR/lib/libwx.dylib" ] || { echo "Error: libwx.dylib isn't found"; exit 1; }
+  # update install name to remove absolute path
+  install_name_tool -id libwx.dylib "$INSTALL_DIR/lib/libwx.dylib"
   [ $DEBUGBUILD ] || strip -u -r "$INSTALL_DIR/lib/libwx.dylib"
   cd ../..
   rm -rf "$WXLUA_BASENAME"
@@ -294,7 +319,7 @@ fi
 
 # build LuaSocket
 if [ $BUILD_LUASOCKET ]; then
-  wget --no-check-certificate -c "$LUASOCKET_URL" -O "$LUASOCKET_FILENAME" || { echo "Error: failed to download LuaSocket"; exit 1; }
+  curl -L "$LUASOCKET_URL" > "$LUASOCKET_FILENAME" || { echo "Error: failed to download LuaSocket"; exit 1; }
   unzip "$LUASOCKET_FILENAME"
   cd "$LUASOCKET_BASENAME"
   mkdir -p "$INSTALL_DIR/lib/lua/$LUAV/"{mime,socket}
@@ -315,7 +340,7 @@ fi
 
 # build lfs
 if [ $BUILD_LFS ]; then
-  wget --no-check-certificate -c "$LFS_URL" -O "$LFS_FILENAME" || { echo "Error: failed to download lfs"; exit 1; }
+  curl -L "$LFS_URL" > "$LFS_FILENAME" || { echo "Error: failed to download lfs"; exit 1; }
   tar -xzf "$LFS_FILENAME"
   mv "luafilesystem-$LFS_BASENAME" "$LFS_BASENAME"
   cd "$LFS_BASENAME/src"
@@ -330,7 +355,7 @@ fi
 
 # build lpeg
 if [ $BUILD_LPEG ]; then
-  wget --no-check-certificate -c "$LPEG_URL" -O "$LPEG_FILENAME" || { echo "Error: failed to download lpeg"; exit 1; }
+  curl -L "$LPEG_URL" > "$LPEG_FILENAME" || { echo "Error: failed to download lpeg"; exit 1; }
   tar -xzf "$LPEG_FILENAME"
   cd "$LPEG_BASENAME"
   mkdir -p "$INSTALL_DIR/lib/lua/$LUAV/"
@@ -344,8 +369,7 @@ fi
 
 # build LuaSec
 if [ $BUILD_LUASEC ]; then
-  # build LuaSec
-  wget --no-check-certificate -c "$LUASEC_URL" -O "$LUASEC_FILENAME" || { echo "Error: failed to download LuaSec"; exit 1; }
+  curl -L "$LUASEC_URL" > "$LUASEC_FILENAME" || { echo "Error: failed to download LuaSec"; exit 1; }
   unzip "$LUASEC_FILENAME"
   # the folder in the archive is "luasec-luasec-....", so need to fix
   mv "luasec-$LUASEC_BASENAME" $LUASEC_BASENAME
@@ -354,9 +378,10 @@ if [ $BUILD_LUASEC ]; then
     src/luasocket/{timeout.c,buffer.c,io.c,usocket.c} src/{context.c,x509.c,ssl.c} -Isrc \
     -lssl -lcrypto \
     || { echo "Error: failed to build LuaSec"; exit 1; }
-  cp src/ssl.lua "$INSTALL_DIR/share/lua/$LUAV"
+  mkdir -p "$INSTALL_DIR/share/lua/$LUAV/"
+  cp src/ssl.lua "$INSTALL_DIR/share/lua/$LUAV/"
   mkdir -p "$INSTALL_DIR/share/lua/$LUAV/ssl"
-  cp src/https.lua "$INSTALL_DIR/share/lua/$LUAV/ssl"
+  cp src/https.lua "$INSTALL_DIR/share/lua/$LUAV/ssl/"
   [ -f "$INSTALL_DIR/lib/lua/$LUAV/ssl.dylib" ] || { echo "Error: ssl.dylib isn't found"; exit 1; }
   [ $DEBUGBUILD ] || strip -u -r "$INSTALL_DIR/lib/lua/$LUAV/ssl.dylib"
   cd ..

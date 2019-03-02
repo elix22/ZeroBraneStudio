@@ -29,7 +29,7 @@ LUASOCKET_BASENAME="luasocket-3.0-rc1"
 LUASOCKET_FILENAME="v3.0-rc1.zip"
 LUASOCKET_URL="https://github.com/diegonehab/luasocket/archive/$LUASOCKET_FILENAME"
 
-OPENSSL_BASENAME="openssl-1.0.2h"
+OPENSSL_BASENAME="openssl-1.0.2o"
 OPENSSL_FILENAME="$OPENSSL_BASENAME.tar.gz"
 OPENSSL_URL="http://www.openssl.org/source/$OPENSSL_FILENAME"
 
@@ -65,6 +65,11 @@ for ARG in "$@"; do
   5.3)
     BUILD_LUA=true
     BUILD_53=true
+    BUILD_FLAGS="$BUILD_FLAGS -DLUA_COMPAT_APIINTCASTS"
+    ;;
+  5.4)
+    BUILD_LUA=true
+    BUILD_54=true
     BUILD_FLAGS="$BUILD_FLAGS -DLUA_COMPAT_APIINTCASTS"
     ;;
   jit)
@@ -116,6 +121,7 @@ for ARG in "$@"; do
     BUILD_LUASEC=true
     BUILD_LFS=true
     BUILD_LPEG=true
+    BUILD_LEXLPEG=true
     ;;
   *)
     echo "Error: invalid argument $ARG"
@@ -144,8 +150,8 @@ fi
 
 # check for wget
 if [ ! "$(which wget)" ]; then
-  # NOTE: can't check the return status since mingw-get always returns 0 even in the case of errors :(
-  mingw-get install msys-wget
+  echo "Error: wget isn't found. Please install GNU Wget."
+  exit 1
 fi
 
 # create the installation directory
@@ -171,6 +177,15 @@ if [ $BUILD_53 ]; then
   LUA_BASENAME="lua-5.3.1"
   LUA_FILENAME="$LUA_BASENAME.tar.gz"
   LUA_URL="http://www.lua.org/ftp/$LUA_FILENAME"
+  LUA_COMPAT="MYCFLAGS=-DLUA_COMPAT_MODULE"
+fi
+
+if [ $BUILD_54 ]; then
+  LUAV="54"
+  LUAS=$LUAV
+  LUA_BASENAME="lua-5.4.0-work1"
+  LUA_FILENAME="$LUA_BASENAME.tar.gz"
+  LUA_URL="http://www.lua.org/work/$LUA_FILENAME"
   LUA_COMPAT="MYCFLAGS=-DLUA_COMPAT_MODULE"
 fi
 
@@ -241,13 +256,23 @@ if [ $BUILD_LEXLPEG ]; then
   [ -f "$INSTALL_DIR/lib/lua/$LUAV/lexlpeg.dll" ] || { echo "Error: LexLPeg.dll isn't found"; exit 1; }
   [ $DEBUGBUILD ] || strip --strip-unneeded "$INSTALL_DIR/lib/lua/$LUAV/lexlpeg.dll"
   cd ..
-  rm -rf "$WXWIDGETS_BASENAME" "$LEXLPEG_BASENAME" "$LEXLPEG_FILENAME"
+  rm -rf "$LEXLPEG_BASENAME" "$LEXLPEG_FILENAME"
+  # don't delete wxwidgets, if it's requested to be built
+  [ $BUILD_WXWIDGETS ] || rm -rf "$WXWIDGETS_BASENAME"
 fi
 
 # build wxWidgets
 if [ $BUILD_WXWIDGETS ]; then
-  git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
+  # don't clone again, as it's already cloned for lexlpeg
+  [ $BUILD_LEXLPEG ] || git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
   cd "$WXWIDGETS_BASENAME"
+
+  # checkout the version that was used in wxwidgets upgrade to 3.1.x
+  git checkout WX_3_1_0-7d9d59
+
+  # refresh wxwidgets submodules
+  git submodule update --init --recursive
+
   ./configure --prefix="$INSTALL_DIR" $WXWIDGETSDEBUG --disable-shared --enable-unicode \
     --enable-compat28 \
     --with-libjpeg=builtin --with-libpng=builtin --with-libtiff=no --with-expat=no \
@@ -263,7 +288,9 @@ fi
 if [ $BUILD_WXLUA ]; then
   git clone "$WXLUA_URL" "$WXLUA_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
   cd "$WXLUA_BASENAME/wxLua"
-  git checkout wxwidgets311
+
+  # checkout the version that matches what was used in wxwidgets upgrade to 3.1.x
+  git checkout WX_3_1_0-7d9d59
 
   sed -i 's|:-/\(.\)/|:-\1:/|' "$INSTALL_DIR/bin/wx-config"
   sed -i 's/execute_process(COMMAND/& sh/' build/CMakewxAppLib.cmake
@@ -357,7 +384,9 @@ if [ $BUILD_LUASEC ]; then
   wget --no-check-certificate -c "$OPENSSL_URL" -O "$OPENSSL_FILENAME" || { echo "Error: failed to download OpenSSL"; exit 1; }
   tar -xzf "$OPENSSL_FILENAME"
   cd "$OPENSSL_BASENAME"
-  RANLIB="$(which ranlib)" bash Configure mingw shared
+  # change `mingw` to `mingw64` to build 64bit library
+  RANLIB="$(which ranlib)" bash ./Configure mingw shared no-asm
+  make depend
   make
   make install_sw INSTALLTOP="$INSTALL_DIR"
   [ $DEBUGBUILD ] || strip --strip-unneeded "$INSTALL_DIR/bin/libeay32.dll" "$INSTALL_DIR/bin/ssleay32.dll"
@@ -374,9 +403,10 @@ if [ $BUILD_LUASEC ]; then
     -DLUASEC_INET_NTOP -DWINVER=0x0501 -D_WIN32_WINNT=0x0501 -DNTDDI_VERSION=0x05010300 \
     src/luasocket/{timeout.c,buffer.c,io.c,wsocket.c} src/{context.c,x509.c,ssl.c} -Isrc "$INSTALL_DIR/bin/ssleay32.dll" "$INSTALL_DIR/bin/libeay32.dll" -lws2_32 -lgdi32 -llua$LUAV \
     || { echo "Error: failed to build LuaSec"; exit 1; }
-  cp src/ssl.lua "$INSTALL_DIR/share/lua/$LUAV"
+  mkdir -p "$INSTALL_DIR/share/lua/$LUAV/"
+  cp src/ssl.lua "$INSTALL_DIR/share/lua/$LUAV/"
   mkdir -p "$INSTALL_DIR/share/lua/$LUAV/ssl"
-  cp src/https.lua "$INSTALL_DIR/share/lua/$LUAV/ssl"
+  cp src/https.lua "$INSTALL_DIR/share/lua/$LUAV/ssl/"
   [ -f "$INSTALL_DIR/lib/lua/$LUAV/ssl.dll" ] || { echo "Error: ssl.dll isn't found"; exit 1; }
   [ $DEBUGBUILD ] || strip --strip-unneeded "$INSTALL_DIR/lib/lua/$LUAV/ssl.dll"
   cd ..
@@ -422,8 +452,8 @@ fi
 if [ $BUILD_LUASEC ]; then
   cp "$INSTALL_DIR/bin/"{ssleay32.dll,libeay32.dll} "$BIN_DIR"
   cp "$INSTALL_DIR/lib/lua/$LUAV/ssl.dll" "$BIN_DIR/clibs$LUAS"
-  cp "$INSTALL_DIR/share/lua/$LUAV/ssl.lua" ../lualibs
-  cp "$INSTALL_DIR/share/lua/$LUAV/ssl/https.lua" ../lualibs/ssl
+  cp "$INSTALL_DIR/share/lua/$LUAV/ssl.lua" "../lualibs"
+  cp "$INSTALL_DIR/share/lua/$LUAV/ssl/https.lua" "../lualibs/ssl"
 fi
 
 # To build lua5.1.dll proxy:

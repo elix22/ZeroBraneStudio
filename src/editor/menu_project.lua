@@ -6,7 +6,6 @@
 local ide = ide
 local frame = ide.frame
 local menuBar = frame.menuBar
-local openDocuments = ide.openDocuments
 
 ------------------------
 -- Interpreters and Menu
@@ -38,12 +37,13 @@ local debugMenu = ide:MakeMenu {
     { ID_BREAKPOINTPREV, TR("Go To Previous Breakpoint")..KSC(ID_BREAKPOINTPREV) },
   } },
   { },
-  { ID_CLEAROUTPUT, TR("C&lear Output Window")..KSC(ID_CLEAROUTPUT), TR("Clear the output window before compiling or debugging"), wx.wxITEM_CHECK },
+  { ID_CLEAROUTPUTENABLE, TR("C&lear Output Window")..KSC(ID_CLEAROUTPUTENABLE), TR("Clear the output window before compiling or debugging"), wx.wxITEM_CHECK },
   { ID_COMMANDLINEPARAMETERS, TR("Command Line Parameters...")..KSC(ID_COMMANDLINEPARAMETERS), TR("Provide command line parameters") },
   { ID_PROJECTDIR, TR("Project Directory"), TR("Set the project directory to be used"), targetDirMenu },
   { ID_INTERPRETER, TR("Lua &Interpreter"), TR("Set the interpreter to be used"), targetMenu },
 }
 menuBar:Append(debugMenu, TR("&Project"))
+menuBar:Check(ID_CLEAROUTPUTENABLE, true)
 
 -- older (<3.x) versions of wxwidgets may not have `GetLabelText`, so provide alternative
 if not pcall(function() return debugMenu.GetLabelText end) then
@@ -139,9 +139,9 @@ end
 -- Project directory handling
 
 local function projChoose(event)
-  local editor = GetEditor()
+  local editor = ide:GetEditor()
   local fn = wx.wxFileName(
-    editor and openDocuments[editor:GetId()].filePath or "")
+    editor and ide:GetDocument(editor):GetFilePath() or "")
   fn:Normalize() -- want absolute path for dialog
 
   local projectdir = ide:GetProject()
@@ -156,10 +156,9 @@ end
 frame:Connect(ID_PROJECTDIRCHOOSE, wx.wxEVT_COMMAND_MENU_SELECTED, projChoose)
 
 local function projFromFile(event)
-  local editor = GetEditor()
+  local editor = ide:GetEditor()
   if not editor then return end
-  local id = editor:GetId()
-  local filepath = openDocuments[id].filePath
+  local filepath = ide:GetDocument(editor):GetFilePath()
   if not filepath then return end
   local fn = wx.wxFileName(filepath)
   fn:Normalize() -- want absolute path for dialog
@@ -171,7 +170,7 @@ end
 frame:Connect(ID_PROJECTDIRFROMFILE, wx.wxEVT_COMMAND_MENU_SELECTED, projFromFile)
 frame:Connect(ID_PROJECTDIRFROMFILE, wx.wxEVT_UPDATE_UI,
   function (event)
-    local editor = GetEditor()
+    local editor = ide:GetEditor()
     event:Enable(editor ~= nil and ide:GetDocument(editor):GetFilePath() ~= nil)
   end)
 
@@ -179,7 +178,7 @@ frame:Connect(ID_PROJECTDIRFROMFILE, wx.wxEVT_UPDATE_UI,
 -- Interpreter Running
 
 local function getNameToRun(skipcheck)
-  local editor = GetEditor()
+  local editor = ide:GetEditor()
   if not editor then return end
 
   -- test compile it before we run it, if successful then ask to save
@@ -194,7 +193,6 @@ local function getNameToRun(skipcheck)
 
   local doc = ide:GetDocument(editor)
   local name = ide:GetProjectStartFile() or doc:GetFilePath()
-  if not name then doc:SetModified(true) end
   if not SaveIfModified(editor) then return end
   if ide.config.editor.saveallonrun then SaveAll(true) end
 
@@ -251,11 +249,11 @@ end
 local BREAKPOINT_MARKER = StylesGetMarker("breakpoint")
 
 frame:Connect(ID_BREAKPOINTTOGGLE, wx.wxEVT_COMMAND_MENU_SELECTED,
-  function() GetEditor():BreakpointToggle() end)
+  function() ide:GetEditor():BreakpointToggle() end)
 frame:Connect(ID_BREAKPOINTTOGGLE, wx.wxEVT_UPDATE_UI,
   function (event)
     local debugger = ide:GetDebugger()
-    local editor = GetEditorWithFocus(GetEditor())
+    local editor = ide:GetEditorWithFocus(ide:GetEditor())
     event:Enable(ide.interpreter and ide.interpreter.hasdebugger and (not debugger.scratchpad)
       and (editor ~= nil) and (not editor:IsLineEmpty()))
   end)
@@ -263,7 +261,7 @@ frame:Connect(ID_BREAKPOINTTOGGLE, wx.wxEVT_UPDATE_UI,
 frame:Connect(ID_BREAKPOINTNEXT, wx.wxEVT_COMMAND_MENU_SELECTED,
   function()
     local BPNSC = KSC(ID_BREAKPOINTNEXT):gsub("\t","")
-    if not GetEditor():MarkerGotoNext(BREAKPOINT_MARKER) and BPNSC == "F9" then
+    if not ide:GetEditor():MarkerGotoNext(BREAKPOINT_MARKER) and BPNSC == "F9" then
       local osx = ide.osname == "Macintosh"
       ide:Print(("You used '%s' shortcut that has been changed from toggling a breakpoint to navigating to the next breakpoint in the document.")
         :format(BPNSC))
@@ -273,22 +271,22 @@ frame:Connect(ID_BREAKPOINTNEXT, wx.wxEVT_COMMAND_MENU_SELECTED,
     end
   end)
 frame:Connect(ID_BREAKPOINTPREV, wx.wxEVT_COMMAND_MENU_SELECTED,
-  function() GetEditor():MarkerGotoPrev(BREAKPOINT_MARKER) end)
+  function() ide:GetEditor():MarkerGotoPrev(BREAKPOINT_MARKER) end)
 
 frame:Connect(ID_BREAKPOINTNEXT, wx.wxEVT_UPDATE_UI,
-  function (event) event:Enable(GetEditor() ~= nil) end)
+  function (event) event:Enable(ide:GetEditor() ~= nil) end)
 frame:Connect(ID_BREAKPOINTPREV, wx.wxEVT_UPDATE_UI,
-  function (event) event:Enable(GetEditor() ~= nil) end)
+  function (event) event:Enable(ide:GetEditor() ~= nil) end)
 
 frame:Connect(ID_COMPILE, wx.wxEVT_COMMAND_MENU_SELECTED,
   function ()
     ide:GetOutput():Activate()
-    CompileProgram(GetEditor(), {
+    CompileProgram(ide:GetEditor(), {
         keepoutput = ide:GetLaunchedProcess() ~= nil or ide:GetDebugger():IsConnected()
     })
   end)
 frame:Connect(ID_COMPILE, wx.wxEVT_UPDATE_UI,
-  function (event) event:Enable(GetEditor() ~= nil) end)
+  function (event) event:Enable(ide:GetEditor() ~= nil) end)
 
 frame:Connect(ID_RUN, wx.wxEVT_COMMAND_MENU_SELECTED, function () ProjectRun() end)
 frame:Connect(ID_RUN, wx.wxEVT_UPDATE_UI,
@@ -310,7 +308,7 @@ frame:Connect(ID_RUNNOW, wx.wxEVT_COMMAND_MENU_SELECTED,
   end)
 frame:Connect(ID_RUNNOW, wx.wxEVT_UPDATE_UI,
   function (event)
-    local editor = GetEditor()
+    local editor = ide:GetEditor()
     local debugger = ide:GetDebugger()
     -- allow scratchpad if there is no server or (there is a server and it is
     -- allowed to turn it into a scratchpad) and we are not debugging anything
@@ -342,7 +340,7 @@ frame:Connect(ID_ATTACHDEBUG, wx.wxEVT_UPDATE_UI,
 frame:Connect(ID_STARTDEBUG, wx.wxEVT_COMMAND_MENU_SELECTED, function () ProjectDebug() end)
 frame:Connect(ID_STARTDEBUG, wx.wxEVT_UPDATE_UI,
   function (event)
-    local editor = GetEditor()
+    local editor = ide:GetEditor()
     local debugger = ide:GetDebugger()
     event:Enable((ide.interpreter) and (ide.interpreter.hasdebugger) and
                  (ide.interpreter.frun ~= nil) and -- nil == no running from this interpreter
@@ -379,7 +377,7 @@ frame:Connect(ID_DETACHDEBUG, wx.wxEVT_UPDATE_UI,
 
 frame:Connect(ID_RUNTO, wx.wxEVT_COMMAND_MENU_SELECTED,
   function ()
-    local editor = GetEditor()
+    local editor = ide:GetEditor()
     ide:GetDebugger():RunTo(editor, editor:GetCurrentLine()+1)
   end)
 frame:Connect(ID_RUNTO, wx.wxEVT_UPDATE_UI,

@@ -79,6 +79,11 @@ for ARG in "$@"; do
     BUILD_53=true
     BUILD_FLAGS="$BUILD_FLAGS -DLUA_COMPAT_APIINTCASTS"
     ;;
+  5.4)
+    BUILD_LUA=true
+    BUILD_54=true
+    BUILD_FLAGS="$BUILD_FLAGS -DLUA_COMPAT_APIINTCASTS"
+    ;;
   jit)
     BUILD_LUA=true
     BUILD_JIT=true
@@ -120,6 +125,7 @@ for ARG in "$@"; do
     BUILD_LUASEC=true
     BUILD_LFS=true
     BUILD_LPEG=true
+    BUILD_LEXLPEG=true
     ;;
   *)
     echo "Error: invalid argument $ARG"
@@ -174,6 +180,15 @@ if [ $BUILD_53 ]; then
   LUA_BASENAME="lua-5.3.1"
   LUA_FILENAME="$LUA_BASENAME.tar.gz"
   LUA_URL="http://www.lua.org/ftp/$LUA_FILENAME"
+fi
+
+if [ $BUILD_54 ]; then
+  LUAV="54"
+  LUAS=$LUAV
+  LUA_BASENAME="lua-5.4.0-work1"
+  LUA_FILENAME="$LUA_BASENAME.tar.gz"
+  LUA_URL="http://www.lua.org/work/$LUA_FILENAME"
+  LUA_COMPAT="MYCFLAGS=-DLUA_COMPAT_MODULE"
 fi
 
 if [ $BUILD_JIT ]; then
@@ -232,14 +247,23 @@ if [ $BUILD_LEXLPEG ]; then
   [ $DEBUGBUILD ] || strip --strip-unneeded "$INSTALL_DIR/lib/lua/$LUAV/lexlpeg.so"
 
   cd ..
-  rm -rf "$WXWIDGETS_BASENAME" "$LEXLPEG_BASENAME" "$LEXLPEG_FILENAME"
+  rm -rf "$LEXLPEG_BASENAME" "$LEXLPEG_FILENAME"
+  # don't delete wxwidgets, if it's requested to be built
+  [ $BUILD_WXWIDGETS ] || rm -rf "$WXWIDGETS_BASENAME"
 fi
 
 # build wxWidgets
 if [ $BUILD_WXWIDGETS ]; then
-  git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
-
+   # don't clone again, as it's already cloned for lexlpeg
+  [ $BUILD_LEXLPEG ] || git clone "$WXWIDGETS_URL" "$WXWIDGETS_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
   cd "$WXWIDGETS_BASENAME"
+
+  # checkout the version that was used in wxwidgets upgrade to 3.1.x
+  git checkout WX_3_1_0-7d9d59
+
+  # refresh wxwidgets submodules
+  git submodule update --init --recursive
+
   ./configure --prefix="$INSTALL_DIR" $WXWIDGETSDEBUG --disable-shared --enable-unicode \
     --enable-compat28 \
     --with-libjpeg=builtin --with-libpng=builtin --with-libtiff=no --with-expat=no \
@@ -255,7 +279,9 @@ fi
 if [ $BUILD_WXLUA ]; then
   git clone "$WXLUA_URL" "$WXLUA_BASENAME" || { echo "Error: failed to get wxWidgets"; exit 1; }
   cd "$WXLUA_BASENAME/wxLua"
-  git checkout wxwidgets311
+
+  # checkout the version that matches what was used in wxwidgets upgrade to 3.1.x
+  git checkout WX_3_1_0-7d9d59
 
   # the following patches wxlua source to fix live coding support in wxlua apps
   # http://www.mail-archive.com/wxlua-users@lists.sourceforge.net/msg03225.html
@@ -340,9 +366,10 @@ if [ $BUILD_LUASEC ]; then
     src/luasocket/{timeout.c,buffer.c,io.c,usocket.c} src/{context.c,x509.c,ssl.c} -Isrc \
     -lssl -lcrypto \
     || { echo "Error: failed to build LuaSec"; exit 1; }
-  cp src/ssl.lua "$INSTALL_DIR/share/lua/$LUAV"
+  mkdir -p "$INSTALL_DIR/share/lua/$LUAV/"
+  cp src/ssl.lua "$INSTALL_DIR/share/lua/$LUAV/"
   mkdir -p "$INSTALL_DIR/share/lua/$LUAV/ssl"
-  cp src/https.lua "$INSTALL_DIR/share/lua/$LUAV/ssl"
+  cp src/https.lua "$INSTALL_DIR/share/lua/$LUAV/ssl/"
   [ -f "$INSTALL_DIR/lib/lua/$LUAV/ssl.so" ] || { echo "Error: ssl.so isn't found"; exit 1; }
   [ $DEBUGBUILD ] || strip --strip-unneeded "$INSTALL_DIR/lib/lua/$LUAV/ssl.so"
   cd ..

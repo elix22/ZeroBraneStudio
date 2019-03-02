@@ -1,4 +1,4 @@
--- Copyright 2011-16 Paul Kulchenko, ZeroBrane LLC
+-- Copyright 2011-18 Paul Kulchenko, ZeroBrane LLC
 ---------------------------------------------------------
 
 local ide = ide
@@ -34,18 +34,28 @@ local function showCommandBar(params)
   local lines = {}
   local linenow = 0
 
+  local sash = ide:GetUIManager():GetArtProvider():GetMetric(wxaui.wxAUI_DOCKART_SASH_SIZE)
+  local border = sash + 2
+
   local nb = ide:GetEditorNotebook()
   local pos = nb:GetScreenPosition()
   if pos then
-    local miny
+    local minx, miny
     for p = 0, nb:GetPageCount()-1 do
-      local y = nb:GetPage(p):GetScreenPosition():GetY()
+      local sp = nb:GetPage(p):GetScreenPosition()
+      local x, y = sp:GetX(), sp:GetY()
       -- just in case, compare with the position of the notebook itself;
       -- this is needed because the tabs that haven't been refreshed yet
       -- may report 0 as their screen position on Linux, which is incorrect.
       if y > pos:GetY() and (not miny or y < miny) then miny = y end
+      if x > pos:GetX() and (not minx or x < minx) then minx = x end
     end
-    pos:SetX(pos:GetX()+nb:GetClientSize():GetWidth()-row_width-16)
+    local anchorx = pos:GetX()+nb:GetClientSize():GetWidth()-row_width-16
+    local cp = nb:GetCurrentPage()
+    if cp and cp:GetScreenPosition():GetX() ~= minx then
+      anchorx = pos:GetX()+border
+    end
+    pos:SetX(anchorx)
     pos:SetY((miny or pos:GetY())+2)
   else
     pos = wx.wxDefaultPosition
@@ -58,8 +68,6 @@ local function showCommandBar(params)
   local sfont = wx.wxFont(tfont)
   tfont:SetPointSize(tfont:GetPointSize()+2)
 
-  local sash = ide:GetUIManager():GetArtProvider():GetMetric(wxaui.wxAUI_DOCKART_SASH_SIZE)
-  local border = sash + 2
   local hoffset = 4
   local voffset = 2
 
@@ -110,10 +118,11 @@ local function showCommandBar(params)
   -- make a one-time callback;
   -- needed because KILL_FOCUS handler can be called after closing window
   local function onExit(index)
-    onExit = function() end
-    onDone(index and lines[index], index, search:GetValue())
     -- delay destroying the frame until all the related processing is done
     ide:DoWhenIdle(function() if ide:IsValidCtrl(frame) then frame:Destroy() end end)
+
+    onExit = function() end
+    onDone(index and lines[index], index, search:GetValue())
   end
 
   local linesnow
@@ -205,7 +214,9 @@ local function showCommandBar(params)
 
   local linewas -- line that was reported when updated
   local function onTextUpdated()
-    pending = ide:GetApp():GetMainLoop():IsYielding()
+    if ide:IsValidProperty(ide:GetApp(), "GetMainLoop") then
+      pending = ide:GetApp():GetMainLoop():IsYielding()
+    end
     if pending then return end
 
     local text = search:GetValue()
@@ -228,7 +239,8 @@ local function showCommandBar(params)
   end
 
   local function onKeyDown(event)
-    if ide:GetApp():GetMainLoop():IsYielding() then
+    if ide:IsValidProperty(ide:GetApp(), "GetMainLoop")
+    and ide:GetApp():GetMainLoop():IsYielding() then
       event:Skip()
       return
     end
@@ -334,7 +346,7 @@ local missing = 3 -- penalty for missing symbols (1 missing == N matching)
 local casemismatch = 0.9 -- score for case mismatch (%% of full match)
 local function score(p, v)
   local function ngrams(str, num, low, needcache)
-    local key = str..'\1'..num
+    local key = str..(low and '\1' or '\2')..num
     if cache[key] then return unpack(cache[key]) end
 
     local t, l, p = {}, {}, 0
@@ -358,7 +370,7 @@ local function score(p, v)
     return is / (ps + vs) - (num == 1 and missing * (ps - is) / (ps + vs) or 0)
   end
 
-  local key = p..'\2'..v
+  local key = p..'\3'..v
   if not cache[key] then
     -- ignore all whitespaces in the pattern for one-gram comparison
     local score = weights.onegram * overlap(p:gsub("%s+",""), v, 1)
@@ -469,25 +481,24 @@ function ShowCommandBar(default, selected)
         if enter == false then ed:EnsureVisibleEnforcePolicy(origline-1) end
       end
 
-      local pindex = preview and nb:GetPageIndex(preview)
       if enter then
-        local fline, sline, tabindex = unpack(t or {})
+        local fline, sline, docindex = unpack(t or {})
 
-        -- jump to symbol; tabindex has the position of the symbol
+        -- jump to symbol; docindex has the position of the symbol
         if text and text:find(special.SYMBOL) then
-          if sline and tabindex then
+          if sline and docindex then
             local index = name2index(sline)
             local editor = index and nb:GetPage(index):DynamicCast("wxStyledTextCtrl")
             if not editor then
               local doc = ide:FindDocument(sline)
               -- reload the file (including the preview to refresh its symbols in the outline)
-              editor = LoadFile(sline, (not doc or doc:GetTabIndex() == pindex) and preview or nil)
+              editor = LoadFile(sline, (not doc or doc:GetEditor() == preview) and preview or nil)
             end
             if editor then
-              if pindex and pindex ~= ide:GetDocument(editor):GetTabIndex() then ClosePage(pindex) end
-              editor:SetFocus() -- in case the focus is on some other panel
-              editor:GotoPos(tabindex-1)
-              editor:EnsureVisibleEnforcePolicy(editor:LineFromPosition(tabindex-1))
+              if preview and preview ~= editor then ide:GetDocument(preview):Close() end
+              editor:GotoPos(docindex-1)
+              editor:EnsureVisibleEnforcePolicy(editor:LineFromPosition(docindex-1))
+              ide:DoWhenIdle(function() ide:GetDocument(editor):SetActive() end)
             end
           end
         -- insert selected method
@@ -501,8 +512,10 @@ function ShowCommandBar(default, selected)
             ed:EnsureVisibleEnforcePolicy(ed:LineFromPosition(pos))
             ed:GotoPos(pos + #method + (isfunc and 1 or 0))
             if isfunc then -- show the tooltip
-              ide.frame:AddPendingEvent(wx.wxCommandEvent(
-                wx.wxEVT_COMMAND_MENU_SELECTED, ID_SHOWTOOLTIP))
+              local frame = ide:GetMainFrame()
+              frame:SetFocus()
+              frame:AddPendingEvent(
+                wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED, ID.SHOWTOOLTIP))
             end
           end
         -- set line position in the (current) editor if requested
@@ -511,11 +524,13 @@ function ShowCommandBar(default, selected)
           if toline and ed then
             ed:GotoLine(toline-1)
             ed:EnsureVisibleEnforcePolicy(toline-1)
-            ed:SetFocus() -- in case the focus is on some other panel
+            ide:DoWhenIdle(function() ide:GetDocument(ed):SetActive() end)
           end
-        elseif tabindex then -- switch to existing tab
-          SetEditorSelection(tabindex)
-          if pindex and pindex ~= tabindex then ClosePage(pindex) end
+        elseif docindex then -- switch to existing document
+          local doc = ide:GetDocumentList()[docindex]
+          if preview and preview ~= doc:GetEditor() then ide:GetDocument(preview):Close() end
+          -- delay switching to allow the panel to be destroyed, as it may pull the focus away
+          ide:DoWhenIdle(function() doc:SetActive() end)
         -- load a new file (into preview if set)
         elseif sline or text then
           -- 1. use "text" if Ctrl/Cmd-Enter is used
@@ -526,16 +541,14 @@ function ShowCommandBar(default, selected)
           local doc = ide:FindDocument(fullPath)
           -- if the document is already opened (not in the preview)
           -- or can't be opened as a file or folder, then close the preview
-          if doc and doc.index ~= pindex
+          if doc and doc:GetEditor() ~= preview
           or not LoadFile(fullPath, preview or nil) and not ide:SetProject(fullPath) then
-            if pindex then ClosePage(pindex) end
+            if preview then ide:GetDocument(preview):Close() end
           end
         end
-      elseif enter == nil then -- changed focus
-        -- do nothing; keep everything as is
       else
         -- close preview
-        if pindex then ClosePage(pindex) end
+        if preview then ide:GetDocument(preview):Close() end
         -- restore original selection if canceled
         if nb:GetSelection() ~= selection then nb:SetSelection(selection) end
       end
@@ -583,7 +596,8 @@ function ShowCommandBar(default, selected)
           for _, doc in pairs(currentonly and {ide:GetDocument(ed)} or ide:GetDocuments()) do
             local path, editor = doc:GetFilePath(), doc:GetEditor()
             if path then paths[path] = true end
-            populateSymbols(path or doc:GetFileName()..tabsep..doc:GetTabIndex(), outline:GetEditorSymbols(editor))
+            local index = doc:GetTabIndex()
+            populateSymbols(path or doc:GetFileName()..tabsep..index, outline:GetEditorSymbols(editor))
           end
 
           -- now add all other files in the project
@@ -626,10 +640,10 @@ function ShowCommandBar(default, selected)
             for libname, lib in pairs(ed.api.tip.shortfinfoclass) do
               for method, val in pairs(lib) do
                 local signature, desc = val:match('(.-)\n(.*)')
-                local m = libname..'.'..method
+                local m = (libname > "" and libname..'.' or "")..method
                 desc = desc and desc:gsub("\n", " ") or val
                 methods[num] = m
-                methods.desc[m] = {signature or (libname..'.'..method), desc}
+                methods.desc[m] = {signature or m, desc}
                 num = num + 1
               end
             end
@@ -651,7 +665,7 @@ function ShowCommandBar(default, selected)
         if toline and ed then markLine(ed, toline) end
       elseif text and #text > 0 and projdir and #projdir > 0 then
         -- populate the list of files
-        files = files or FileSysGetRecursive(projdir, true, "*",
+        files = files or ide:GetFileList(projdir, true, "*",
           {sort = false, path = false, folder = false, skipbinary = true})
         local topscore
         for _, item in ipairs(commandBarScoreItems(files, text, maxitems)) do
@@ -665,8 +679,8 @@ function ShowCommandBar(default, selected)
           end
         end
       else
-        for _, doc in pairs(ide:GetDocuments()) do
-          lines[doc:GetTabIndex()+1] = {doc:GetFileName(), doc:GetFilePath(), doc:GetTabIndex()}
+        for index, doc in pairs(ide:GetDocumentList()) do
+          lines[index] = {doc:GetFileName(), doc:GetFilePath(), index}
         end
       end
       return lines
@@ -680,10 +694,10 @@ function ShowCommandBar(default, selected)
       end
     end,
     onSelection = function(t, text)
-      local _, file, tabindex = unpack(t)
+      local _, file, docindex = unpack(t)
       local pos
       if text and text:find(special.SYMBOL) then
-        pos, tabindex = tabindex, name2index(file)
+        pos, docindex = docindex, name2index(file)
       elseif text and text:find(special.METHOD) then
         return
       end
@@ -694,11 +708,12 @@ function ShowCommandBar(default, selected)
       -- or files in the preview are updated.
       nb:SetEvtHandlerEnabled(false)
       local doc = file and ide:FindDocument(file)
-      if doc and not tabindex then tabindex = doc:GetTabIndex() end
-      if tabindex then
-        local ed = nb:GetPage(tabindex)
+      if docindex or doc then
+        local doc = docindex and ide:GetDocumentList()[docindex] or doc
+        local index, nb = doc:GetTabIndex()
+        local ed = nb:GetPage(index)
         ed:SetEvtHandlerEnabled(false)
-        if nb:GetSelection() ~= tabindex then nb:SetSelection(tabindex) end
+        if nb:GetSelection() ~= index then nb:SetSelection(index) end
         ed:SetEvtHandlerEnabled(true)
       elseif file then
         -- skip binary files with unknown extensions
@@ -714,7 +729,7 @@ function ShowCommandBar(default, selected)
           if not win then preview:Update() preview:Refresh() end
           preview:SetEvtHandlerEnabled(true)
         elseif preview then
-          ClosePage(nb:GetPageIndex(preview))
+          ide:GetDocument(preview):Close()
           preview = nil
         end
       end
@@ -730,9 +745,9 @@ end
 
 ide.test.commandBarScoreItems = commandBarScoreItems
 
-local sep = GetPathSeparator()
+local fsep = GetPathSeparator()
 local function relpath(path, filepath)
-  local pathpatt = "^"..EscapeMagic(path:gsub("[\\/]$",""):gsub("[\\/]", sep))..sep.."?"
+  local pathpatt = "^"..EscapeMagic(path:gsub("[\\/]$",""):gsub("[\\/]", fsep))..fsep.."?"
   return (filepath:gsub(pathpatt, ""))
 end
 
@@ -750,7 +765,7 @@ ide:AddPackage('core.commandbar', {
       if not files or tree:IsDirectory(item) then return end
       addremove[relpath(ide:GetProject(), filepath)] = false
     end,
-    onFiletreeFileRefresh = function(self, tree, item, filepath)
+    onFiletreeFileRefresh = function(self)
       if not files then return end
 
       -- to save time only keep the file cache up-to-date if it's used

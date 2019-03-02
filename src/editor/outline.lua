@@ -47,7 +47,7 @@ local function outlineRefresh(editor, force)
   local tokens = editor:GetTokenList()
   local sep = editor.spec.sep
   local varname = "([%w_][%w_"..q(sep:sub(1,1)).."]*)"
-  local funcs = {updated = TimeGet()}
+  local funcs = {updated = ide:GetTime()}
   local var = {}
   local outcfg = ide.config.outline or {}
   local scopes = {}
@@ -229,7 +229,7 @@ local function indexFromQueue()
 
   local editor = ide:GetEditor()
   local inactivity = ide.config.symbolindexinactivity
-  if editor and inactivity and editor.updated > TimeGet()-inactivity then
+  if editor and inactivity and editor:GetModifiedTime() > ide:GetTime()-inactivity then
     -- reschedule timer for later time
     resetIndexTimer()
   else
@@ -244,7 +244,7 @@ local function indexFromQueue()
       editor:SetTextDyn(content)
       editor:Colourise(0, -1)
       editor:ResetTokenList()
-      while IndicateAll(editor) do end
+      while editor:IndicateSymbols() do end
 
       outline:UpdateSymbols(fname, outlineRefresh(editor))
       editor:Destroy()
@@ -268,12 +268,12 @@ local function createOutlineWindow()
     + wx.wxTR_HIDE_ROOT + wx.wxNO_BORDER)
 
   outline.outlineCtrl = ctrl
-  ide.timers.outline = ide:AddTimer(ctrl, function() outlineRefresh(GetEditor(), false) end)
+  ide.timers.outline = ide:AddTimer(ctrl, function() outlineRefresh(ide:GetEditor(), false) end)
   ide.timers.symbolindex = ide:AddTimer(ctrl, function() ide:DoWhenIdle(indexFromQueue) end)
 
   ctrl:AddRoot("Outline")
   ctrl:SetImageList(outline.imglist)
-  ctrl:SetFont(ide.font.fNormal)
+  ctrl:SetFont(ide.font.tree)
 
   function ctrl:ActivateItem(item_id)
     local data = ctrl:GetItemData(item_id)
@@ -326,7 +326,7 @@ local function createOutlineWindow()
       ctrl:ActivateItem(event:GetItem())
     end)
 
-  ctrl:Connect(ID_OUTLINESORT, wx.wxEVT_COMMAND_MENU_SELECTED,
+  ctrl:Connect(ID.OUTLINESORT, wx.wxEVT_COMMAND_MENU_SELECTED,
     function()
       ide.config.outline.sort = not ide.config.outline.sort
       local ed = ide:GetEditor()
@@ -344,9 +344,9 @@ local function createOutlineWindow()
   ctrl:Connect(wx.wxEVT_COMMAND_TREE_ITEM_MENU,
     function (event)
       local menu = ide:MakeMenu {
-        { ID_OUTLINESORT, TR("Sort By Name"), "", wx.wxITEM_CHECK },
+        { ID.OUTLINESORT, TR("Sort By Name"), "", wx.wxITEM_CHECK },
       }
-      menu:Check(ID_OUTLINESORT, ide.config.outline.sort)
+      menu:Check(ID.OUTLINESORT, ide.config.outline.sort)
 
       PackageEventHandle("onMenuOutline", menu, ctrl, event)
 
@@ -471,7 +471,7 @@ local package = ide:AddPackage('core.outline', {
       end
       local path = doc and doc:GetFilePath()
       if path and cache and cache.funcs then
-        outline:UpdateSymbols(path, cache.funcs.updated > editor.updated and cache.funcs or nil)
+        outline:UpdateSymbols(path, cache.funcs.updated > editor:GetModifiedTime() and cache.funcs or nil)
         outline:SaveSettings()
       end
     end,
@@ -539,10 +539,10 @@ local package = ide:AddPackage('core.outline', {
       local item_id = event:GetItem()
       local name = tree:GetItemFullName(item_id)
       local symboldirmenu = ide:MakeMenu {
-        {ID_SYMBOLDIRREFRESH, TR("Refresh Index"), TR("Refresh indexed symbols from files in the selected directory")},
-        {ID_SYMBOLDIRDISABLE, TR("Disable Indexing For '%s'"):format(name), TR("Ignore and don't index symbols from files in the selected directory")},
+        {ID.SYMBOLDIRREFRESH, TR("Refresh Index"), TR("Refresh indexed symbols from files in the selected directory")},
+        {ID.SYMBOLDIRDISABLE, TR("Disable Indexing For '%s'"):format(name), TR("Ignore and don't index symbols from files in the selected directory")},
       }
-      local _, _, projdirpos = ide:FindMenuItem(ID_PROJECTDIR, menu)
+      local _, _, projdirpos = ide:FindMenuItem(ID.PROJECTDIR, menu)
       if projdirpos then
         local ignored = isIgnoredInIndex(name)
         local enabledirmenu = ide:MakeMenu {}
@@ -555,26 +555,26 @@ local package = ide:AddPackage('core.outline', {
           tree:Connect(id, wx.wxEVT_COMMAND_MENU_SELECTED, function() enableIndex(path) end)
         end
 
-        symboldirmenu:Append(wx.wxMenuItem(symboldirmenu, ID_SYMBOLDIRENABLE,
+        symboldirmenu:Append(wx.wxMenuItem(symboldirmenu, ID.SYMBOLDIRENABLE,
           TR("Enable Indexing"), "", wx.wxITEM_NORMAL, enabledirmenu))
-        menu:Insert(projdirpos+1, wx.wxMenuItem(menu, ID_SYMBOLDIRINDEX,
+        menu:Insert(projdirpos+1, wx.wxMenuItem(menu, ID.SYMBOLDIRINDEX,
           TR("Symbol Index"), "", wx.wxITEM_NORMAL, symboldirmenu))
 
         -- disable "enable" if it's empty
-        menu:Enable(ID_SYMBOLDIRENABLE, #paths > 0)
+        menu:Enable(ID.SYMBOLDIRENABLE, #paths > 0)
         -- disable "refresh" and "disable" if the directory is ignored
         -- or if any of the directories above it are ignored
-        menu:Enable(ID_SYMBOLDIRREFRESH, tree:IsDirectory(item_id) and not ignored)
-        menu:Enable(ID_SYMBOLDIRDISABLE, tree:IsDirectory(item_id) and not ignored)
+        menu:Enable(ID.SYMBOLDIRREFRESH, tree:IsDirectory(item_id) and not ignored)
+        menu:Enable(ID.SYMBOLDIRDISABLE, tree:IsDirectory(item_id) and not ignored)
 
-        tree:Connect(ID_SYMBOLDIRREFRESH, wx.wxEVT_COMMAND_MENU_SELECTED, function()
+        tree:Connect(ID.SYMBOLDIRREFRESH, wx.wxEVT_COMMAND_MENU_SELECTED, function()
             -- purge files in this directory as some might have been removed;
             -- files will be purged based on time, but this is a good time to clean.
             purgeIndex(name)
             outline:RefreshSymbols(name)
             resetIndexTimer(1) -- start after 1ms
           end)
-        tree:Connect(ID_SYMBOLDIRDISABLE, wx.wxEVT_COMMAND_MENU_SELECTED, function()
+        tree:Connect(ID.SYMBOLDIRDISABLE, wx.wxEVT_COMMAND_MENU_SELECTED, function()
             disableIndex(name)
           end)
        end
@@ -666,7 +666,7 @@ end
 function outline:GetEditorSymbols(editor)
   -- force token refresh (as these may be not updated yet)
   if #editor:GetTokenList() == 0 then
-    while IndicateAll(editor) do end
+    while editor:IndicateSymbols() do end
   end
 
   -- only refresh the functions when none is present
@@ -687,7 +687,7 @@ function outline:RefreshSymbols(path, callback)
     -- skip those directories that are on the "ignore" list
     ondirectory = function(name) return outline.settings.ignoredirs[name] == nil end
   }
-  local nextfile = coroutine.wrap(function() FileSysGetRecursive(path, true, table.concat(exts, ";"), opts) end)
+  local nextfile = coroutine.wrap(function() ide:GetFileList(path, true, table.concat(exts, ";"), opts) end)
   while true do
     local file = nextfile()
     if not file then break end
@@ -700,7 +700,7 @@ function outline:UpdateSymbols(fname, symb)
   symbols[fname] = symb
 
   -- purge outdated records
-  local threshold = TimeGet() - 60*60*24*7 -- cache for 7 days
+  local threshold = ide:GetTime() - 60*60*24*7 -- cache for 7 days
   if not self.indexpurged then
     for k, v in pairs(symbols) do
       if v.updated < threshold then symbols[k] = nil end

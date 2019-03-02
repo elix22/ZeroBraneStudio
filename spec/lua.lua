@@ -95,7 +95,7 @@ return {
       :gsub("%b()","()") -- remove all function calls
     )
 
-    local func = (isfndef(str) or str:match("%W+function%s*%(")) and 1 or 0
+    local func = (isfndef(str) or str:match("%f[%w_]function%s*%(")) and 1 or 0
     local term = str:match("^%s*([%w_]+)%W*")
     local terminc = term and incindent[term] and 1 or 0
     -- fix 'if' not terminated with 'then'
@@ -103,6 +103,8 @@ return {
     if (term == 'if' or term == 'elseif') and not str:match("%f[%w_]then%f[^%w_]")
     or (term == 'for') and not str:match("%f[%w_]do%f[^%w_]")
     or (term == 'while') and not str:match("%f[%w_]do%f[^%w_]")
+    -- or `repeat ... until` are on the same line
+    or (term == 'repeat') and str:match("%f[%w_]until%f[^%w_]")
     -- if this is a function definition, then don't increment the level
     or func == 1 then
       terminc = 0
@@ -114,7 +116,7 @@ return {
     local _, opened = str:gsub("([%{%(])", "%1")
     local _, closed = str:gsub("([%}%)])", "%1")
     -- ended should only be used to negate term and func effects
-    local anon = str:match("%W+function%s*%(.+[^%w_]end%f[^%w_]")
+    local anon = str:match("%f[%w_]function%s*%(.+[^%w_]end%f[^%w_]")
     local ended = (terminc + func > 0) and (str:match("[^%w_]+end%s*$") or anon) and 1 or 0
 
     return opened - closed + func + terminc - ended
@@ -208,7 +210,6 @@ return {
         end
 
         if (var and typ) then
-          local class,func = typ:match(varname.."["..q(sep).."]"..varname)
           if (assigns[typ] and not req) then
             assigns[var] = assigns[typ]
           else

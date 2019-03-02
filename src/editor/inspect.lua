@@ -1,4 +1,4 @@
--- Copyright 2012-17 Paul Kulchenko, ZeroBrane LLC
+-- Copyright 2012-18 Paul Kulchenko, ZeroBrane LLC
 -- Integration with LuaInspect or LuaCheck
 ---------------------------------------------------------
 
@@ -87,8 +87,8 @@ else
 
     -- metalua is using 'checks', which noticeably slows the execution
     -- stab it with out own
-    package.loaded.checks = {}
-    checks = function() end
+    package.loaded.checks = {} -- make `require 'checks'` work even without `checks` module
+    rawset(_G, "checks", function() end) -- provide `checks` function
 
     LA = require "luainspect.ast"
     LI = require "luainspect.init"
@@ -230,6 +230,8 @@ else
     return err and err:gsub(".-:%d+: file%s+",""):gsub(", line (%d+), char %d+", ":%1")
   end
 
+  init()
+
   warnings_from_string = function(src, file)
     init()
 
@@ -280,9 +282,9 @@ end
 local frame = ide.frame
 
 -- insert after "Compile" item
-local _, menu, compilepos = ide:FindMenuItem(ID_COMPILE)
+local _, menu, compilepos = ide:FindMenuItem(ID.COMPILE)
 if compilepos then
-  menu:Insert(compilepos+1, ID_ANALYZE, TR("Analyze")..KSC(ID_ANALYZE), TR("Analyze the source code"))
+  menu:Insert(compilepos+1, ID.ANALYZE, TR("Analyze")..KSC(ID.ANALYZE), TR("Analyze the source code"))
 end
 
 local function analyzeProgram(editor)
@@ -308,13 +310,13 @@ local function analyzeProgram(editor)
   return true -- analyzed ok
 end
 
-frame:Connect(ID_ANALYZE, wx.wxEVT_COMMAND_MENU_SELECTED,
+frame:Connect(ID.ANALYZE, wx.wxEVT_COMMAND_MENU_SELECTED,
   function ()
     ide:GetOutput():Activate()
-    local editor = GetEditor()
+    local editor = ide:GetEditor()
     if not analyzeProgram(editor) then
       CompileProgram(editor, { reportstats = false, keepoutput = true })
     end
   end)
-frame:Connect(ID_ANALYZE, wx.wxEVT_UPDATE_UI,
-  function (event) event:Enable(GetEditor() ~= nil) end)
+frame:Connect(ID.ANALYZE, wx.wxEVT_UPDATE_UI,
+  function (event) event:Enable(ide:GetEditor() ~= nil) end)

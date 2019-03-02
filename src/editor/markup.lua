@@ -2,6 +2,7 @@
 -- styles for comment markup
 ---------------------------------------------------------
 
+local ide = ide
 local MD_MARK_ITAL = '_' -- italic
 local MD_MARK_BOLD = '**' -- bold
 local MD_MARK_LINK = '[' -- link description start
@@ -69,7 +70,7 @@ function MarkupHotspotClick(pos, editor)
   if text then
     text = text:gsub("^"..q(MD_MARK_LINA), ""):gsub(q(MD_MARK_LINT).."$", "")
     local doc = ide:GetDocument(editor)
-    local filepath = doc and doc.filePath or FileTreeGetDir()
+    local filepath = doc and doc.filePath or ide:GetProject()
     local _,_,http = string.find(text, [[^(https?:%S+)$]])
     local _,_,command,code = string.find(text, [[^macro:(%w+)%((.*%S)%)$]])
     if not command then _,_,command = string.find(text, [[^macro:(%w+)$]]) end
@@ -123,6 +124,9 @@ local function ismarkup (tx)
       s,e,cap = string.find(tx,
         "^(%b"..MD_MARK_LINK..MD_MARK_LINZ
         .."%b"..MD_MARK_LINA..MD_MARK_LINT..")", st)
+      -- if either part of the link is empty `[]` or `()`, skip the match
+      if cap and cap:find("^"..q(MD_MARK_LINK..MD_MARK_LINZ))
+      or cap and cap:find(q(MD_MARK_LINA..MD_MARK_LINT).."$") then s = nil end
     elseif markup[sep] then
       -- try a single character first, then 2+ characters between separators;
       -- this is to handle "`5` `6`" as two sequences, not one.
@@ -190,6 +194,11 @@ function MarkupStyle(editor, lines, linee)
           elseif mark == MD_MARK_LINK then
             local lsep = w:find(q(MD_MARK_LINZ)..q(MD_MARK_LINA))
             if lsep then emark = #w-lsep+#MD_MARK_LINT end
+          end
+          local sp = bit.band(editor:GetStyleAt(p-1), ide.STYLEMASK) -- previous position style
+          if mark == MD_MARK_HEAD and not iscomment[sp] then
+            p = p + 1
+            smark = smark - 1
           end
           editor:StartStyling(p, ide.STYLEMASK)
           editor:SetStyling(smark, markup[MD_MARK_MARK].st)

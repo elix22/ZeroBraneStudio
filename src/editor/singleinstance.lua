@@ -15,19 +15,11 @@ probably a pitfal: an instance is running but is not visible
   (because it was finished though the UDP thing still runs)
 ]]
 
+if not ide.config.singleinstance then return end
+
 local socket = require "socket"
 local svr = socket.udp()
-
-function ide:Restart(hotexit)
-  self:AddPackage("core.restart", {
-      onAppShutdown = function() wx.wxExecute(ide:GetLaunchPath(true), wx.wxEXEC_ASYNC) end
-    })
-  if self.timers.idle then self.timers.idle:Stop() end
-  if svr then svr:close() end
-  self:Exit(hotexit)
-end
-
-if not ide.config.singleinstance then return end
+ide.singleinstanceserver = svr
 
 local port = ide.config.singleinstanceport
 local delay = tonumber(ide.config.singleinstance) or 1000 -- in ms
@@ -43,10 +35,12 @@ protocol.server.answerok = "Sure. You may now leave."
 if success then -- ok, server was started, we are solo
   svr:settimeout(0) -- don't block
   ide.timers.idle = ide:AddTimer(wx.wxGetApp(), function()
-      local msg, ip, port = svr:receivefrom()
-      if msg then
+      while true do
+        local msg, ip, port = svr:receivefrom()
+        if not msg then break end
+
         if msg == protocol.client.greeting then
-          svr:sendto(protocol.server.greeting:format(wx.wxGetUserName()),ip,port)
+          svr:sendto(protocol.server.greeting:format(wx.wxGetUserId()),ip,port)
         elseif msg == protocol.client.show then
           svr:sendto(protocol.server.answerok,ip,port)
           ide:RequestAttention()
@@ -68,28 +62,23 @@ else -- something different is running on our port
   cln:send(protocol.client.greeting)
 
   local msg = cln:receive()
-  local arg = ide.arg
   if msg and msg:match(protocol.server.greeting:gsub("%%s",".+$")) then
     local username = msg:match(protocol.server.greeting:gsub("%%s","(.+)$"))
-    if username ~= wx.wxGetUserName() then
+    if username ~= wx.wxGetUserId() then
       ide:Print(("Another instance is running under user '%s' and can't be activated. This instance will continue running, which may cause interference with the debugger."):format(username))
     else
       local failed = false
-      for index = 2, #arg do
-        local fileName = arg[index]
-        if fileName ~= "--"
-        -- on OSX, the command line includes -psn parameter, so ignore it
-        and (ide.osname ~= 'Macintosh' or not fileName:find("^-psn")) then
-          cln:send(protocol.client.requestloading:format(fileName))
+      for _, filename in ipairs(ide.filenames) do
+        cln:send(protocol.client.requestloading
+          :format(ide.cwd and GetFullPathIfExists(ide.cwd, filename) or filename))
 
-          local msg, err = cln:receive()
-          if msg ~= protocol.server.answerok then
-            failed = true
-            ide:Print(err,msg)
-          end
+        local msg, err = cln:receive()
+        if msg ~= protocol.server.answerok then
+          failed = true
+          ide:Print(err,msg)
         end
       end
-      if #arg == 1 then -- no files are being loaded; just active the IDE
+      if #ide.filenames == 0 then -- no files are being loaded; just active the IDE
         cln:send(protocol.client.show)
         if cln:receive() ~= protocol.server.answerok then failed = true end
       end
